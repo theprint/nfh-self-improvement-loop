@@ -75,9 +75,29 @@ The evaluator checks for:
 
 Decision: **APPROVE** (merge to main) or **REJECT** (rollback dev branch). Default mindset: reject unless proven valuable.
 
-### Enforcement
+### Hard Blocks (Non-Negotiable Enforcement)
 
-A verification script (`verify-agents.sh`) checks that the generator and evaluator have different session IDs. If they're the same, the loop aborts. This is a hard guardrail — not documentation, but code that enforces separation.
+Two enforcement scripts run before any merge can happen:
+
+**`verify-agents.sh`** — Ensures generator and evaluator are different sessions:
+- Reads `generator_session_id` and `evaluator_session_id` from `state.json`
+- Aborts if either is missing or if they match
+- This is the cardinal rule: same agent for generation and evaluation = theater
+
+**`hard-blocks.sh`** — Enforces three additional invariants:
+1. **Single change limit** — If more than 3 files changed in a cycle, it's a batch operation. Batch operations are forbidden. Auto-rollback to main.
+2. **Separate agents** — Generator and evaluator session IDs must exist in `state.json` and must differ.
+3. **Verdict recorded** — `last_verdict` must be `APPROVE` before any merge. No verdict = evaluation never ran.
+
+These scripts are called by `orchestrate.sh` and exit with code 1 on any violation. The loop stops immediately. These are not suggestions enforced by prompts — they are bash scripts that cannot be talked around.
+
+### Why Two Scripts?
+
+`verify-agents.sh` was the original guardrail. After a production failure where a single sub-agent bypassed all evaluation (see Lessons Learned #8), `hard-blocks.sh` was added to enforce additional invariants that the original architecture didn't cover:
+- Batch detection (the failure mode: a sub-agent made 10 changes in one session with zero evaluation)
+- Verdict verification (ensuring evaluation actually happened before merge)
+
+Together they form a defense-in-depth approach.
 
 ## Why This Architecture
 
@@ -107,12 +127,11 @@ Where this differs: autoresearch evaluates against a training metric (loss). Thi
 
 - [OpenClaw](https://github.com/openclaw/openclaw) — for spawning isolated sub-agent sessions
 - Git — branch-based isolation
-- Access to at least two LLM providers (different models for generator and evaluator)
 
 ### Quick Start
 
 ```bash
-chmod +x nfh.sh orchestrate.sh preflight.sh verify-agents.sh
+chmod +x nfh.sh orchestrate.sh preflight.sh verify-agents.sh hard-blocks.sh
 ./nfh
 ```
 
@@ -143,6 +162,7 @@ self-improvement/
 ├── orchestrate.sh          # Main loop controller
 ├── preflight.sh            # Mandatory checks before any cycle
 ├── verify-agents.sh        # Hard guardrail: enforces separate sessions
+├── hard-blocks.sh          # Hard guardrail: batch detection, verdict verification
 ├── generator-prompt.md     # Instructions for the generator agent
 ├── evaluator-prompt.md     # Instructions for the evaluator agent
 ├── proposal-template.md    # Template for improvement proposals
@@ -158,6 +178,7 @@ self-improvement/
 3. **Context for evaluator ≠ generator context.** The generator needs user context (preferences, priorities) to choose what to build. The evaluator needs codebase context (what exists, what's redundant, behavioral rules in AGENTS.md) to judge quality. Giving the evaluator the generator's rationale biases it toward approval.
 4. **Document the architecture, then enforce it in code.** A PLAN.md that says "use separate agents" while the code uses the same session is a bug. Verification scripts beat documentation.
 5. **Guardrails over instructions.** Hard constraints (separate sessions, abort on violation) are more reliable than prompts telling the agent to behave.
+6. **Prompts are not guardrails.** In production, a sub-agent was spawned with a text description of the loop architecture. It ignored every instruction — batched 10 changes, never spawned a separate evaluator, never ran any verification script, and merged everything with 100% approval. The fix was adding `hard-blocks.sh` — a script that exits 1 (non-negotiable) on violation. Every architectural rule must have a corresponding script that can't be talked around.
 6. **Track everything.** State JSON with session IDs, approval rates, and mode rotation catches patterns (like approval rate creep) before they become systemic.
 7. **Mode rotation prevents fixation.** Without it, the generator will propose the same type of improvement repeatedly.
 

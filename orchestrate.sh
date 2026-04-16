@@ -10,7 +10,6 @@ STATE_FILE="$PROJECT_DIR/state.json"
 # Set timer defaults if not provided by caller
 export LOOP_START_TIME=${LOOP_START_TIME:-$(date +%s)}
 export LOOP_DURATION=${LOOP_DURATION:-900}  # 15 minutes default
-export LOOP_MAX_CYCLES=${LOOP_MAX_CYCLES:-0}  # 0 = unlimited
 
 # === PRE-FLIGHT: Run ALL checks ===
 if [ -f "$PROJECT_DIR/preflight.sh" ]; then
@@ -23,6 +22,11 @@ fi
 # Verify separate agents (critical guardrail)
 if [ -f "$PROJECT_DIR/verify-agents.sh" ]; then
     "$PROJECT_DIR/verify-agents.sh" || exit 1
+fi
+
+# Hard blocks — non-negotiable enforcement
+if [ -f "$PROJECT_DIR/hard-blocks.sh" ]; then
+    "$PROJECT_DIR/hard-blocks.sh" || exit 1
 fi
 
 cd "$WORKSPACE"
